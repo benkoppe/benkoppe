@@ -40,9 +40,11 @@ jobs:
           USER_NAME: ${{ secrets.USER_NAME }}
         run: uv run update.py
 
-      - name: Commit changes
-        uses: stefanzweifel/git-auto-commit-action@v5
-        with:
-          commit_message: Update README
-          commit_user_name: benkoppe/github-actions[bot]
-          commit_user_email: github-actions-bot@benkoppe.github.io
+      - name: Commit & push changes
+        run: |-
+          git add .
+          git diff
+          git config --global user.email "github-actions-bot@benkoppe.github.io"
+          git config --global user.name "benkoppe/github-actions[bot]"
+          git commit -m "Update README" -a || echo "No changes to commit"
+          git push
