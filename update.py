@@ -29,7 +29,7 @@ class ReplacementConfig:
 REPLACEMENT_CONFIGS = {
     "age": ReplacementConfig(r"Uptime:.*\n", "Uptime:{filler}{in1}\n", "."),
     "repos": ReplacementConfig(
-        r"Repos:.* \|", "Repos:{filler}{in1:,} {{Contributed: {in2:,}}} ", "."
+        r"Repos:.* \|", "Repos:{filler}{in1:,} {{Contributed: {in2:,}}} |", "."
     ),
     "stars": ReplacementConfig(r"Stars:.*\n", "Stars:{filler}{in1:,}\n", "."),
     "commits": ReplacementConfig(r"Commits:.* \|", "Commits:{filler}{in1:,} |", "."),
