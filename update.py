@@ -368,7 +368,7 @@ def force_close_file(filename, data, cache_comment):
     )
 
 
-# fetches 100 commits from a repo at a time
+# fetches 50 commits from a repo at a time
 def recursive_loc(owner, repo_name, force_close_file):
     def fetch_loc(cursor=None, commits=0, additions=0, deletions=0):
         query = """
@@ -377,7 +377,7 @@ def recursive_loc(owner, repo_name, force_close_file):
             defaultBranchRef {
                 target {
                     ... on Commit {
-                        history(first: 100, after: $cursor) {
+                        history(first: 50, after: $cursor) {
                             totalCount
                             edges {
                                 node {
