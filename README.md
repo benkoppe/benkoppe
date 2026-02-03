@@ -4,9 +4,9 @@
    /:/\:\  \                               . Uptime: ........................ 22 years, 2 months, 20 days
   /:/ /::\__\                              . Host: ................................... Cornell University
  /:/_/:/\:|__|    ___                      .
- \:\/:/ /:/  /   /\__\                     . IDE: ........................................... Neovim 10.2
-  \::/_/:/  /   /:/ _/_                    . Experience: ...................... Python, Swift, Svelte, Go
-   \:\/:/  /   /:/ /\__\                   . Hobbies: ........ iOS Productivity, Full-Stack Tool Creation
+ \:\/:/ /:/  /   /\__\                     . IDE: ................................................ Neovim
+  \::/_/:/  /   /:/ _/_                    . Experience: ................. Python, Swift, Svelte, Go, Nix
+   \:\/:/  /   /:/ /\__\                   . Hobbies: ........... Full-Stack, Server Infra, Build Systems
     \::/  /   /:/ /:/ _/_
      \/__/   /:/_/:/ /\__\    ___          — Contact ————————————————————————————————————————————————————
              \:\/:/ /:/  /   /\  \         . Email: ......................... koppe.development@gmail.com
