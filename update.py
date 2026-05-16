@@ -211,7 +211,10 @@ def fetch_repos_stars(count_type: Literal["repos", "stars"], owner_affiliation) 
 
 
 def fetch_loc(owner_affiliation, comment_size=0):
-    def collect_edges(curr_edges=[], cursor=None):
+    def collect_edges(curr_edges=None, cursor=None):
+        if curr_edges is None:
+            curr_edges = []
+
         query = """
         query ($owner_affiliation: [RepositoryAffiliation], $login: String!, $cursor: String) {
         user(login: $login) {
@@ -223,6 +226,7 @@ def fetch_loc(owner_affiliation, comment_size=0):
                         defaultBranchRef {
                             target {
                                 ... on Commit {
+                                    oid
                                     history {
                                         totalCount
                                         }
@@ -246,11 +250,13 @@ def fetch_loc(owner_affiliation, comment_size=0):
             "cursor": cursor,
         }
         request = simple_request(fetch_loc.__name__, query, variables)
-        curr_edges += request.json()["data"]["user"]["repositories"]["edges"]
-        if request.json()["data"]["user"]["repositories"]["pageInfo"]["hasNextPage"]:
+        repos = request.json()["data"]["user"]["repositories"]
+
+        curr_edges += repos["edges"]
+        if repos["pageInfo"]["hasNextPage"]:
             return collect_edges(
                 curr_edges,
-                request.json()["data"]["user"]["repositories"]["pageInfo"]["endCursor"],
+                repos["pageInfo"]["endCursor"],
             )
         return curr_edges
 
@@ -262,7 +268,7 @@ def get_cache_filename():
     return Path(f"cache/{hashlib.sha256(USER_NAME.encode('utf-8')).hexdigest()}.txt")
 
 
-# checks each repository in edges to see if its been updated since last cache; runs recursive_loc if it has
+# checks each repository in edges to see if it's been updated since last cache
 def build_cache(edges, comment_size, force_cache):
     cached = True
     filename = get_cache_filename()
@@ -288,45 +294,65 @@ def build_cache(edges, comment_size, force_cache):
     cache_comment = data[:comment_size]  # save the comment block
     data = data[comment_size:]  # remove the comment block
     for index in range(len(edges)):
-        repo_hash, commit_count, *_ = data[index].split()
-        if (
-            repo_hash
-            == hashlib.sha256(
-                edges[index]["node"]["nameWithOwner"].encode("utf-8")
-            ).hexdigest()
-        ):
-            try:
-                if (
-                    int(commit_count)
-                    != edges[index]["node"]["defaultBranchRef"]["target"]["history"][
-                        "totalCount"
-                    ]
-                ):
-                    # if commit count has changed, update loc
-                    owner, repo_name = edges[index]["node"]["nameWithOwner"].split("/")
-                    print(f"cache: updating repo {repo_name}")
-                    commits, additions, deletions = recursive_loc(
-                        owner,
-                        repo_name,
-                        lambda: force_close_file(filename, data, cache_comment),
-                    )
-                    total_count = edges[index]["node"]["defaultBranchRef"]["target"][
-                        "history"
-                    ]["totalCount"]
-                    data[index] = (
-                        " ".join(
-                            [
-                                repo_hash,
-                                str(total_count),
-                                str(commits),
-                                str(additions),
-                                str(deletions),
-                            ]
-                        )
-                        + "\n"
-                    )
-            except TypeError:  # if the repo is empty
-                data[index] = repo_hash + " 0 0 0 0\n"
+        repo = edges[index]["node"]
+        repo_hash = hashlib.sha256(repo["nameWithOwner"].encode("utf-8")).hexdigest()
+        default_branch = repo["defaultBranchRef"]
+
+        if default_branch is None:
+            data[index] = f"{repo_hash} 0 none 0 0 0\n"
+            continue
+
+        target = default_branch["target"]
+        latest_sha = target["oid"]
+        total_count = target["history"]["totalCount"]
+
+        parts = data[index].split()
+
+        if len(parts) == 5:
+            old_repo_hash, _, my_commits, additions, deletions = parts
+            if old_repo_hash != repo_hash:
+                data[index] = f"{repo_hash} {total_count} {latest_sha} 0 0 0\n"
+                cached = False
+                continue
+
+            data[index] = (
+                f"{old_repo_hash} {total_count} {latest_sha} "
+                f"{my_commits} {additions} {deletions}\n"
+            )
+            cached = False
+            continue
+
+        old_repo_hash, commit_count, cached_sha, my_commits, additions, deletions = parts
+
+        if old_repo_hash != repo_hash:
+            data[index] = f"{repo_hash} {total_count} {latest_sha} 0 0 0\n"
+            cached = False
+            continue
+
+        if int(commit_count) == total_count and cached_sha == latest_sha:
+            continue
+
+        owner, repo_name = repo["nameWithOwner"].split("/")
+        print(f"cache: updating repo {repo_name}")
+
+        try:
+            new_commits, new_additions, new_deletions = incremental_loc(
+                owner,
+                repo_name,
+                cached_sha,
+                lambda: force_close_file(filename, data, cache_comment),
+            )
+        except Exception as error:
+            print(f"cache: skipping repo {repo_name}: {error}")
+            continue
+
+        data[index] = (
+            f"{repo_hash} {total_count} {latest_sha} "
+            f"{int(my_commits) + new_commits} "
+            f"{int(additions) + new_additions} "
+            f"{int(deletions) + new_deletions}\n"
+        )
+        cached = False
 
     with open(filename, "w") as f:
         f.writelines(cache_comment)
@@ -336,8 +362,8 @@ def build_cache(edges, comment_size, force_cache):
     total_del = 0
     for line in data:
         loc = line.split()
-        total_add += int(loc[3])
-        total_del += int(loc[4])
+        total_add += int(loc[4])
+        total_del += int(loc[5])
     return total_add, total_del, total_add - total_del, cached
 
 
@@ -350,12 +376,19 @@ def flush_cache(edges, filename, comment_size):
     with open(filename, "w") as f:
         f.writelines(data)
         for node in edges:
-            f.write(
-                hashlib.sha256(
-                    node["node"]["nameWithOwner"].encode("utf-8")
-                ).hexdigest()
-                + " 0 0 0 0\n"
-            )
+            repo = node["node"]
+            repo_hash = hashlib.sha256(repo["nameWithOwner"].encode("utf-8")).hexdigest()
+            default_branch = repo["defaultBranchRef"]
+
+            if default_branch is None:
+                f.write(f"{repo_hash} 0 none 0 0 0\n")
+                continue
+
+            target = default_branch["target"]
+            total_count = target["history"]["totalCount"]
+            latest_sha = target["oid"]
+
+            f.write(f"{repo_hash} {total_count} {latest_sha} 0 0 0\n")
 
 
 # forces the cache file to close, preserving whatever data was written to it
@@ -368,9 +401,13 @@ def force_close_file(filename, data, cache_comment):
     )
 
 
-# fetches 50 commits from a repo at a time
-def recursive_loc(owner, repo_name, force_close_file):
-    def fetch_loc(cursor=None, commits=0, additions=0, deletions=0):
+def incremental_loc(owner, repo_name, cached_sha, force_close_file):
+    cursor = None
+    commits = 0
+    additions = 0
+    deletions = 0
+
+    while True:
         query = """
         query ($repo_name: String!, $owner: String!, $cursor: String) {
         repository(name: $repo_name, owner: $owner) {
@@ -378,11 +415,10 @@ def recursive_loc(owner, repo_name, force_close_file):
                 target {
                     ... on Commit {
                         history(first: 50, after: $cursor) {
-                            totalCount
                             edges {
                                 node {
                                     ... on Commit {
-                                        committedDate
+                                        oid
                                     }
                                     author {
                                         user {
@@ -406,38 +442,42 @@ def recursive_loc(owner, repo_name, force_close_file):
         """
         variables = {"repo_name": repo_name, "owner": owner, "cursor": cursor}
         request = simple_request(
-            recursive_loc.__name__, query, variables, check_status_code=False
-        )
-        if request.status_code == 200:
-            if (
-                request.json()["data"]["repository"]["defaultBranchRef"] != None
-            ):  # only count commits if repo isn't empty
-                history = request.json()["data"]["repository"]["defaultBranchRef"][
-                    "target"
-                ]["history"]
-                for node in history["edges"]:
-                    if node["node"]["author"]["user"] == USER_ID:
-                        commits += 1
-                        additions += node["node"]["additions"]
-                        deletions += node["node"]["deletions"]
-                if history["edges"] == [] or not history["pageInfo"]["hasNextPage"]:
-                    return commits, additions, deletions
-                else:
-                    return fetch_loc(
-                        history["pageInfo"]["endCursor"], commits, additions, deletions
-                    )
-            else:
-                return commits, additions, deletions
-        force_close_file()  # saves what is currently in the file before the program crashes
-        if request.status_code == 403:
-            raise Exception(
-                "Too many requests in a short amount of time!\nYou've hit the non-documented anti-abuse limit!"
-            )
-        raise Exception(
-            f"{recursive_loc.__name__} has failed with a {request.status_code} {request.text}"
+            incremental_loc.__name__, query, variables, check_status_code=False
         )
 
-    return fetch_loc()
+        if request.status_code != 200:
+            force_close_file()
+            if request.status_code == 403:
+                raise Exception(
+                    "Too many requests in a short amount of time! "
+                    "You've hit the non-documented anti-abuse limit."
+                )
+            raise Exception(
+                f"{incremental_loc.__name__} has failed with a "
+                f"{request.status_code} {request.text}"
+            )
+
+        default_branch = request.json()["data"]["repository"]["defaultBranchRef"]
+        if default_branch is None:
+            return commits, additions, deletions
+
+        history = default_branch["target"]["history"]
+
+        for edge in history["edges"]:
+            commit = edge["node"]
+
+            if commit["oid"] == cached_sha:
+                return commits, additions, deletions
+
+            if commit["author"]["user"] == USER_ID:
+                commits += 1
+                additions += commit["additions"]
+                deletions += commit["deletions"]
+
+        if not history["edges"] or not history["pageInfo"]["hasNextPage"]:
+            return commits, additions, deletions
+
+        cursor = history["pageInfo"]["endCursor"]
 
 
 # tallies total commits using cache_builder file
@@ -447,7 +487,11 @@ def count_commits(comment_size):
     with open(filename, "r") as f:
         data = f.readlines()[comment_size:]
     for line in data:
-        total += int(line.split()[2])
+        parts = line.split()
+        if len(parts) == 5:
+            total += int(parts[2])
+        else:
+            total += int(parts[3])
     return total
 
 
