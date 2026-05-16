@@ -285,37 +285,42 @@ def build_cache(edges, comment_size, force_cache):
         with open(filename, "w") as f:
             f.writelines(data)
 
-    if len(data) - comment_size != len(edges) or force_cache:
-        cached = False
-        flush_cache(edges, filename, comment_size)
-        with open(filename, "r") as f:
-            data = f.readlines()
-
     cache_comment = data[:comment_size]  # save the comment block
     data = data[comment_size:]  # remove the comment block
-    for index in range(len(edges)):
-        repo = edges[index]["node"]
+
+    existing_by_hash = {}
+    if not force_cache:
+        for line in data:
+            parts = line.split()
+            if len(parts) in (5, 6):
+                existing_by_hash[parts[0]] = parts
+
+    new_data = []
+    if len(data) != len(edges) or force_cache:
+        cached = False
+
+    for edge in edges:
+        repo = edge["node"]
         repo_hash = hashlib.sha256(repo["nameWithOwner"].encode("utf-8")).hexdigest()
         default_branch = repo["defaultBranchRef"]
 
         if default_branch is None:
-            data[index] = f"{repo_hash} 0 none 0 0 0\n"
+            new_data.append(f"{repo_hash} 0 none 0 0 0\n")
             continue
 
         target = default_branch["target"]
         latest_sha = target["oid"]
         total_count = target["history"]["totalCount"]
 
-        parts = data[index].split()
+        parts = existing_by_hash.get(repo_hash)
+        if parts is None:
+            new_data.append(f"{repo_hash} {total_count} {latest_sha} 0 0 0\n")
+            cached = False
+            continue
 
         if len(parts) == 5:
             old_repo_hash, _, my_commits, additions, deletions = parts
-            if old_repo_hash != repo_hash:
-                data[index] = f"{repo_hash} {total_count} {latest_sha} 0 0 0\n"
-                cached = False
-                continue
-
-            data[index] = (
+            new_data.append(
                 f"{old_repo_hash} {total_count} {latest_sha} "
                 f"{my_commits} {additions} {deletions}\n"
             )
@@ -324,12 +329,8 @@ def build_cache(edges, comment_size, force_cache):
 
         old_repo_hash, commit_count, cached_sha, my_commits, additions, deletions = parts
 
-        if old_repo_hash != repo_hash:
-            data[index] = f"{repo_hash} {total_count} {latest_sha} 0 0 0\n"
-            cached = False
-            continue
-
         if int(commit_count) == total_count and cached_sha == latest_sha:
+            new_data.append(" ".join(parts) + "\n")
             continue
 
         owner, repo_name = repo["nameWithOwner"].split("/")
@@ -340,13 +341,14 @@ def build_cache(edges, comment_size, force_cache):
                 owner,
                 repo_name,
                 cached_sha,
-                lambda: force_close_file(filename, data, cache_comment),
+                lambda: force_close_file(filename, new_data, cache_comment),
             )
         except Exception as error:
             print(f"cache: skipping repo {repo_name}: {error}")
+            new_data.append(" ".join(parts) + "\n")
             continue
 
-        data[index] = (
+        new_data.append(
             f"{repo_hash} {total_count} {latest_sha} "
             f"{int(my_commits) + new_commits} "
             f"{int(additions) + new_additions} "
@@ -356,11 +358,11 @@ def build_cache(edges, comment_size, force_cache):
 
     with open(filename, "w") as f:
         f.writelines(cache_comment)
-        f.writelines(data)
+        f.writelines(new_data)
 
     total_add = 0
     total_del = 0
-    for line in data:
+    for line in new_data:
         loc = line.split()
         total_add += int(loc[4])
         total_del += int(loc[5])
