@@ -21,6 +21,7 @@ jobs:
           user: ${{ github.repository_owner }}
           template: classic
           plugins_errors_fatal: yes
+          base: ""
 
           plugin_isocalendar: yes
           plugin_isocalendar_duration: full-year
