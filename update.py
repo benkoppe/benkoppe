@@ -181,9 +181,7 @@ def fetch_repos_stars(count_type: Literal["repos", "stars"], owner_affiliation) 
                     node {
                         ... on Repository {
                             nameWithOwner
-                            stargazers {
-                                totalCount
-                            }
+                            stargazerCount
                         }
                     }
                 }
@@ -205,8 +203,12 @@ def fetch_repos_stars(count_type: Literal["repos", "stars"], owner_affiliation) 
     elif count_type == "stars":
         data = request.json()["data"]["user"]["repositories"]["edges"]
         total_stars = 0
-        for node in data:
-            total_stars += node["node"]["stargazers"]["totalCount"]
+        for edge in data:
+            repo = edge["node"]
+            # GitHub can return null nodes for unavailable repositories.
+            if repo is None:
+                continue
+            total_stars += repo["stargazerCount"]
         return total_stars
 
 
